@@ -1,7 +1,7 @@
 // @name 两个BT
 // @author 
 // @description 刮削：支持，弹幕：支持，嗅探：支持
-// @version 1.0.1
+// @version 1.0.2
 // @downloadURL https://xget.xi-xu.me/gh/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/两个BT.js
 /**
  * ============================================================================
@@ -296,23 +296,38 @@ const buildUrl = (tid, pg, extend = {}) => {
 
 async function home(params) {
   logInfo("进入首页");
-  return {
-    class: [
-      { type_id: "movie_bt_tags/xiju", type_name: "喜剧" },
-      { type_id: "movie_bt_tags/aiqing", type_name: "爱情" },
-      { type_id: "movie_bt_tags/adt", type_name: "冒险" },
-      { type_id: "movie_bt_tags/at", type_name: "动作" },
-      { type_id: "movie_bt_tags/donghua", type_name: "动画" },
-      { type_id: "movie_bt_tags/qihuan", type_name: "奇幻" },
-      { type_id: "movie_bt_tags/xuanni", type_name: "悬疑" },
-      { type_id: "movie_bt_tags/kehuan", type_name: "科幻" },
-      { type_id: "movie_bt_tags/juqing", type_name: "剧情" },
-      { type_id: "movie_bt_tags/kongbu", type_name: "恐怖" },
-      { type_id: "meiju", type_name: "美剧" },
-      { type_id: "gf", type_name: "高分电影" },
+  const result = {
+    class: [{ type_id: "zgjun", type_name: "国产剧" },
+    { type_id: "meiju", type_name: "美剧" },
+    { type_id: "jpsrtv", type_name: "日韩剧" },
+    { type_id: "movie_bt_tags/xiju", type_name: "喜剧" },
+    { type_id: "movie_bt_tags/aiqing", type_name: "爱情" },
+    { type_id: "movie_bt_tags/adt", type_name: "冒险" },
+    { type_id: "movie_bt_tags/at", type_name: "动作" },
+    { type_id: "movie_bt_tags/donghua", type_name: "动画" },
+    { type_id: "movie_bt_tags/qihuan", type_name: "奇幻" },
+    { type_id: "movie_bt_tags/xuanni", type_name: "悬疑" },
+    { type_id: "movie_bt_tags/kehuan", type_name: "科幻" },
+    { type_id: "movie_bt_tags/juqing", type_name: "剧情" },
+    { type_id: "movie_bt_tags/kongbu", type_name: "恐怖" },
+    { type_id: "gf", type_name: "高分电影" },
     ],
     list: [],
   };
+
+  try {
+    const url = host;
+    logInfo(`首页URL: ${url}`);
+    const res = await axiosInstance.get(url, { headers: def_headers });
+    const $ = cheerio.load(res.data);
+    const list = extractVideoList($);
+    logInfo(`首页获取到 ${list.length} 个项目`);
+    result.list = list;
+  } catch (e) {
+    logError("首页请求失败", e);
+  }
+
+  return result;
 }
 
 async function category(params) {
