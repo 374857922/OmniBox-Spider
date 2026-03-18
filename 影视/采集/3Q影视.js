@@ -2,7 +2,7 @@
 // @author W.Q, @wujiwanmei, @lucky_TJQ, tcxp, @shortai
 // @description 刮削：支持，弹幕：支持，嗅探：支持
 // @dependencies: axios, crypto
-// @version 1.0.3
+// @version 1.0.4
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/3Q影视.js
 
 /**
@@ -90,6 +90,21 @@ const decodeMeta = (str) => {
         return {};
     }
 };
+
+/**
+ * Promise 超时包装，避免接口长时间阻塞
+ * @param {Promise<any>} promise - 原始 Promise
+ * @param {number} ms - 超时时间（毫秒）
+ * @param {string} label - 超时标签
+ * @returns {Promise<any>}
+ */
+const withTimeout = (promise, ms, label = "operation") =>
+    Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        }),
+    ]);
 
 // ========== 筛选器配置 ==========
 
@@ -1157,12 +1172,12 @@ async function detail(params) {
 
         // 构建基本信息
         const vod = {
-            vod_id: data.vod_id,
+            vod_id: data.vod_id.toString(),
             vod_name: data.vod_name,
             vod_pic: data.vod_pic,
             vod_remarks: data.vod_remarks,
             vod_content: data.vod_content,
-            vod_year: data.vod_year || '',
+            vod_year: data.vod_year.toString() || '',
             vod_area: data.vod_area || '',
             vod_actor: data.vod_actor || '',
             vod_director: data.vod_director || '',
@@ -1241,27 +1256,41 @@ async function detail(params) {
         // 执行刮削
         if (scrapeCandidates.length > 0) {
             try {
-                const scrapingResult = await OmniBox.processScraping(
-                    videoIdForScrape,
-                    vod.vod_name || "",
-                    vod.vod_name || "",
-                    scrapeCandidates
-                );
-                logInfo(`刮削处理完成: ${JSON.stringify(scrapingResult || {}).substring(0, 200)}`);
-
-                // 获取刮削元数据
-                const metadata = await OmniBox.getScrapeMetadata(videoIdForScrape);
+                // 先快速读取已有刮削缓存，避免阻塞详情页返回
+                const metadata = await withTimeout(OmniBox.getScrapeMetadata(videoIdForScrape), 300, "getScrapeMetadata(cache)");
                 scrapeData = metadata?.scrapeData || null;
                 videoMappings = metadata?.videoMappings || [];
                 scrapeType = metadata?.scrapeType || "";
-                logInfo(`刮削元数据读取完成`, {
+                logInfo(`刮削缓存读取完成`, {
                     hasScrapeData: !!scrapeData,
                     mappingCount: videoMappings.length,
                     scrapeType
                 });
             } catch (error) {
-                logError("刮削处理失败", error);
+                logInfo(`刮削缓存读取失败: ${error.message}`);
             }
+
+            // 后台触发完整刮削，不阻塞详情页
+            OmniBox.processScraping(
+                    videoIdForScrape,
+                    vod.vod_name || "",
+                    vod.vod_name || "",
+                    scrapeCandidates
+                )
+                .then((scrapingResult) => {
+                    logInfo(`后台刮削处理完成: ${JSON.stringify(scrapingResult || {}).substring(0, 200)}`);
+                    return OmniBox.getScrapeMetadata(videoIdForScrape);
+                })
+                .then((metadata) => {
+                    logInfo("后台刮削元数据更新完成", {
+                        hasScrapeData: !!metadata?.scrapeData,
+                        mappingCount: (metadata?.videoMappings || []).length,
+                        scrapeType: metadata?.scrapeType || ""
+                    });
+                })
+                .catch((bgError) => {
+                    logInfo(`后台刮削失败: ${bgError.message}`);
+                });
         }
 
         // 应用刮削结果到集数名称
@@ -1340,7 +1369,7 @@ async function detail(params) {
             }
         }
 
-        logInfo(`详情处理完成，播放源数: ${vod.vod_play_sources.length}`);
+        OmniBox.log("info", `详情处理完成，播放源数: ${JSON.stringify(vod)}`);
 
         return {
             list: [vod]
@@ -1415,7 +1444,7 @@ async function play(params) {
         const videoIdForScrape = videoIdFromParam || videoIdFromMeta;
 
         if (videoIdForScrape) {
-            const metadata = await OmniBox.getScrapeMetadata(videoIdForScrape);
+            const metadata = await withTimeout(OmniBox.getScrapeMetadata(videoIdForScrape), 1800, "getScrapeMetadata(play)");
             if (metadata && metadata.scrapeData) {
                 const mapping = findMappingByFid(metadata.videoMappings || [], playMeta?.fid, playMeta?.e || episodeName || "");
                 scrapedDanmuFileName = buildScrapedDanmuFileName(
