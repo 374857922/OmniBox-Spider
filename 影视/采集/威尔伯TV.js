@@ -2,7 +2,7 @@
 // @author 梦
 // @description 刮削：已接入，弹幕：未接入，嗅探：直接返回 play.modujx11.com 直链
 // @dependencies cheerio
-// @version 1.0.3
+// @version 1.0.4
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/openclaw/影视/采集/威尔伯TV.js
 
 const OmniBox = require("omnibox_sdk");
@@ -143,14 +143,47 @@ function extractSectionList(html, typeId) {
   return extractGridListFromText(sectionText, urlPrefix);
 }
 
-function buildDetailResult(html, vodId) {
+function mergeHomeSections(html) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of CATEGORY_MAP) {
+    const sectionList = extractSectionList(html, item.type_id);
+    for (const vod of sectionList) {
+      if (!vod?.vod_id || seen.has(vod.vod_id)) continue;
+      seen.add(vod.vod_id);
+      merged.push(vod);
+    }
+  }
+  return merged;
+}
+
+function pickTypeFromId(typeId) {
+  return CATEGORY_MAP.find((item) => item.type_id === typeId)?.type_name || "";
+}
+
+function extractInfoTokens(text) {
+  const match = text.match(/className":"text-gray-1 text-sm","children":\[(.*?)\]\}/);
+  if (!match) return [];
+  return [...match[1].matchAll(/"([^"]*)"/g)]
+    .map((m) => clean(m[1]))
+    .filter((item) => item && item !== "·");
+}
+
+function buildDetailResult(html, vodId, typeId) {
   const $ = cheerio.load(html);
   const text = decodeRsc(html);
   const title = clean($("title").text()).replace(/\s+在线观看.*$/, "") || clean($("meta[property='og:title']").attr("content"));
   const poster = absUrl($("meta[property='og:image']").attr("content"));
-  const content = clean($("meta[property='og:description']").attr("content") || $("meta[name='description']").attr("content") || "");
-  const director = clean($("a[href*='google.com/search?q=导演:']").text() || "");
-  const infoLine = clean($(".space-y-2 p.text-gray-1").first().text());
+  const contentMatch = text.match(/"vodContent":"([^"]*)"/);
+  const content = clean(contentMatch?.[1] || $("meta[property='og:description']").attr("content") || $("meta[name='description']").attr("content") || "");
+  const directorMatch = text.match(/q=导演:([^"&]+)["&]/);
+  const director = clean(directorMatch?.[1] || $("a[href*='google.com/search?q=导演:']").text() || "");
+  const infoTokens = extractInfoTokens(text);
+  const vodYear = infoTokens.find((item) => /^\d{4}$/.test(item)) || "";
+  const maybeLang = infoTokens.filter((item) => !/^\d{4}$/.test(item));
+  const typeName = maybeLang[0] || pickTypeFromId(typeId) || "";
+  const lang = maybeLang[maybeLang.length - 1] || "";
+  const infoLine = [typeName, vodYear, lang].filter(Boolean).join(" · ");
 
   const playUrlMatch = text.match(/https:\/\/play\.modujx11\.com\/[^"\s]+\.m3u8/);
   const episodeMatches = [...text.matchAll(/([^"\[]+)\$(https:\/\/play\.modujx11\.com\/[^"\s]+\.m3u8)/g)];
@@ -171,6 +204,8 @@ function buildDetailResult(html, vodId) {
     vod_id: String(vodId || ""),
     vod_name: title,
     vod_pic: poster,
+    type_name: typeName,
+    vod_year: vodYear,
     vod_content: content,
     vod_actor: "",
     vod_director: director || "",
@@ -186,22 +221,24 @@ async function home(params, context) {
     const rawVodNameCount = (html.match(/vodName/g) || []).length;
     const rawUrlPrefixCount = (html.match(/urlPrefix/g) || []).length;
     const firstVodNameIdx = html.indexOf("vodName");
-    await log("info", "home 抓取完成", { htmlLength: html.length, rawVodNameCount, rawUrlPrefixCount, firstVodNameIdx, firstVodNameSnippet: firstVodNameIdx >= 0 ? html.slice(Math.max(0, firstVodNameIdx - 80), firstVodNameIdx + 220) : "" });
+    await log("info", "home 抓取完成", {
+      htmlLength: html.length,
+      rawVodNameCount,
+      rawUrlPrefixCount,
+      firstVodNameIdx,
+      firstVodNameSnippet: firstVodNameIdx >= 0 ? html.slice(Math.max(0, firstVodNameIdx - 80), firstVodNameIdx + 220) : "",
+    });
+
     let list = extractCarouselList(html);
+    await log("info", "home 轮播解析", { listCount: list.length, first: list[0] || null });
     if (!list.length) {
-      const merged = [];
-      const seen = new Set();
+      list = mergeHomeSections(html).slice(0, 24);
       for (const item of CATEGORY_MAP) {
         const sectionList = extractSectionList(html, item.type_id);
         await log("info", "home 分区解析", { typeId: item.type_id, count: sectionList.length, first: sectionList[0] || null });
-        for (const vod of sectionList) {
-          if (!vod?.vod_id || seen.has(vod.vod_id)) continue;
-          seen.add(vod.vod_id);
-          merged.push(vod);
-        }
       }
-      list = merged.slice(0, 24);
     }
+
     await log("info", "home 解析完成", { listCount: list.length, first: list[0] || null });
     return { class: CATEGORY_MAP, filters: {}, list };
   } catch (e) {
@@ -265,8 +302,16 @@ async function detail(params, context) {
     await log("info", "detail 请求前", { url, vodId, typeId });
     const html = await fetchText(url);
     await log("info", "detail 请求后", { url, htmlLength: html.length, m3u8Count: (html.match(/play\.modujx11\.com/g) || []).length });
-    const vod = buildDetailResult(html, vodId);
-    await log("info", "detail 解析完成", { vodId, sourceCount: vod.vod_play_sources.length, episodeCount: vod.vod_play_sources.reduce((n, s) => n + (s.episodes || []).length, 0) });
+    const vod = buildDetailResult(html, vodId, typeId);
+    await log("info", "detail 解析完成", {
+      vodId,
+      vodName: vod.vod_name,
+      remarks: vod.vod_remarks,
+      director: vod.vod_director,
+      contentLength: (vod.vod_content || '').length,
+      sourceCount: vod.vod_play_sources.length,
+      episodeCount: vod.vod_play_sources.reduce((n, s) => n + (s.episodes || []).length, 0),
+    });
     return { list: [vod] };
   } catch (e) {
     await log("error", "detail 失败", { error: e.message, params });
@@ -280,11 +325,27 @@ async function search(params, context) {
     const keyword = String(params.keyword || params.wd || params.key || "").trim();
     const page = Math.max(1, parseInt(params.page || 1, 10));
     if (!keyword) return { page, pagecount: 0, total: 0, list: [] };
+
     const html = await fetchText(`${HOST}/search?wd=${encodeURIComponent(keyword)}`);
     const rawVodNameCount = (html.match(/vodName/g) || []).length;
     const idx = html.indexOf(keyword);
-    await log("info", "search 请求后", { keyword, page, htmlLength: html.length, rawVodNameCount, keywordIndex: idx, keywordSnippet: idx >= 0 ? html.slice(Math.max(0, idx - 80), idx + 220) : "" });
-    const list = extractSectionList(html, "movie");
+    await log("info", "search 请求后", {
+      keyword,
+      page,
+      htmlLength: html.length,
+      rawVodNameCount,
+      keywordIndex: idx,
+      keywordSnippet: idx >= 0 ? html.slice(Math.max(0, idx - 80), idx + 220) : "",
+    });
+
+    let list = extractSectionList(html, "movie");
+    if (!list.length) {
+      const homeHtml = await fetchText(`${HOST}/`);
+      const merged = mergeHomeSections(homeHtml);
+      list = merged.filter((item) => String(item.vod_name || '').includes(keyword)).slice(0, 24);
+      await log("info", "search 首页兜底结果", { keyword, page, mergedCount: merged.length, listCount: list.length, first: list[0] || null });
+    }
+
     await log("info", "search 解析结果", { keyword, page, listCount: list.length, first: list[0] || null });
     return { page, pagecount: page + (list.length >= 12 ? 1 : 0), total: list.length, list };
   } catch (e) {
