@@ -2,7 +2,7 @@
 // @author 梦
 // @description 刮削：未接入，弹幕：未接入，嗅探：不需要（直链优先，支持网盘线路展开）
 // @dependencies
-// @version 1.3.5
+// @version 1.3.6
 // @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/LIBVIO.js
 
 const http = require("http");
@@ -645,6 +645,23 @@ function isDirectMediaUrl(url = "") {
     }
 }
 
+function buildProviderIframeUrl(player = {}) {
+    const from = String(player?.from || '').trim();
+    const rawUrl = String(player?.url || '').trim();
+    const id = String(player?.id || '').trim();
+    const nid = String(player?.nid || '').trim();
+    const next = String(player?.link_next || '').trim();
+    if (!from || !rawUrl) return "";
+
+    if (from === 'ty_new1') {
+        return `${getCurrentHost()}/vid/ty4.php?url=${encodeURIComponent(rawUrl)}&next=${encodeURIComponent(next)}&id=${encodeURIComponent(id)}&nid=${encodeURIComponent(nid)}`;
+    }
+    if (from === 'vr2') {
+        return `${getCurrentHost()}/vid/plyr/vr2.php?url=${encodeURIComponent(rawUrl)}&next=${encodeURIComponent(next)}&id=${encodeURIComponent(id)}&nid=${encodeURIComponent(nid)}`;
+    }
+    return "";
+}
+
 function emptyPlay(flag = "LIBVIO") {
     return { parse: 0, flag, urls: [] };
 }
@@ -889,7 +906,8 @@ async function play(params, context) {
             };
         }
 
-        logInfo("play 使用嗅探兜底", { playPageUrl, from: player.from, decodedUrl: realUrl, encrypt: player.encrypt, rawUrl: player.url });
+        const iframeUrl = buildProviderIframeUrl(player);
+        logInfo("play 使用嗅探兜底", { playPageUrl, from: player.from, decodedUrl: realUrl, encrypt: player.encrypt, rawUrl: player.url, iframeUrl });
         return {
             parse: 1,
             flag: playFlag,
@@ -898,7 +916,7 @@ async function play(params, context) {
                 Origin: getCurrentHost(),
                 "User-Agent": UA
             },
-            urls: [{ name: meta.name || "播放", url: playPageUrl }]
+            urls: [{ name: meta.name || "播放", url: iframeUrl || playPageUrl }]
         };
     } catch (error) {
         logError("play 失败", error);
